@@ -11,29 +11,42 @@ Data::Censor - censor sensitive stuff in a data structure
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 
 =head1 SYNOPSIS
 
     # OO way, letting you specify your own list of sensitive-looking fields, and
-    # what they should be replaced by
+    # what they should be replaced by (all options here are optional)
     my $censor = Data::Censor->new(
+        # Specify which fields to censor:
         sensitive_fields => [ qw(card_number password) ],
+
+        # Specify text to replace their values with:
         replacement => '(Sensitive data hidden)',
+
+        # Or specify callbacks for each field name which return the "censored"
+        # value - in this case, masking a card number (PAN) to show only the
+        # last four digits:
+        replacement_callbacks => {
+            card_number => sub {
+                my $pan = shift;
+                return "x" x (length($pan) - 4) . substr($pan, -4, 4);
+            },
+        },
     );
     
     # Censor the data in-place (changes the data structure, returns the number
     # of keys censored)
     my $censor_count = $censor->censor(\%data);
 
-    # Or clone the original data structure and return it after censoring:
-    my $censored_data = $censor->censored_data(\%data);
-
+    # Alternate non-OO interface, using default settings and returning a cloned
+    # version of the data after censoring:
+    my $censored_data = Data::Censor->clone_and_censor(\%data);
 
 
 =head1 new (CONSTRUCTOR)
@@ -49,13 +62,18 @@ against each key to see if it's considered sensitive.
 
 =item replacement
 
-The string to replace each value with
+The string to replace each value with.  Any censoring callback provided in
+C<replacement_callbacks> which matches this key will take precedence over this
+straightforward value.
 
 =item replacement_callbacks
 
 A hashref of key => sub {...}, where each key is a column name to match, and the
 coderef takes the uncensored value and returns the censored value, letting you
 for instance mask a card number but leave the last 4 digits visible.
+
+If you provide both C<replacement> and C<replacement_callbacks>, any callback
+defined which matches the key being considered takes precedence.
 
 =back
 
@@ -145,13 +163,24 @@ sub censor {
     return $censored;
 }
 
-=head2 censored_data
+=head2 clone_and_censor
 
-Class method for quick censoring with default options - takes a hashref, clones
-it, applies censoring, and returns the resulting cloned hashref.
+Clones the provided hashref (using L<Clone> - will die if not installed), then
+censors the cloned data and returns it.
+
+Can be used both as a class or object method - the former for a quick way to use
+it without having to instantiate an object, the latter if you want to apply
+custom settings to the object before using it.
+
+  # As a class method
+  my $censored_data = Data::Censor->clone_and_censor($data);
+
+  # or as an object method
+  my $censor = Data::Censor->new( replacement => "SECRET!" );
+  my $censored_data = $censor->clone_and_censor($data);
 
 =cut
-sub censored_data {
+sub clone_and_censor {
     my $class = shift;
     my $data = shift;
     
@@ -159,7 +188,15 @@ sub censored_data {
         or die "Can't clone data without Clone installed";
 
     my $cloned_data = Clone::clone($data);
-    $class->new->censor($cloned_data);
+
+    # if $class is a Data::Censor object, then we were called as an object method
+    # rather than a class method - that's fine - otherwise, create a new
+    # instance and use it:
+    my $self = ref $class && $class->isa('Data::Censor')
+        ? $class
+        : $class->new;
+
+    $self->censor($cloned_data);
     return $cloned_data;
 };
 
